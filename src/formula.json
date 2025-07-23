@@ -1,0 +1,60 @@
+{
+    "Advanced oil processing": {
+        "input": {
+            "time": 5,
+            "crude oil": 100,
+            "water": 50
+        }, "output": {
+            "heavy oil": 25,
+            "light oil": 45,
+            "petroleum gas": 55
+        }
+    },
+    "Heavy oil cracking": {
+        "input": {
+            "time": 2,
+            "heavy oil": 40,
+            "water": 30
+        },
+        "output": {
+            "light oil": 30
+        }
+    },
+    "Light oil cracking": {
+        "input": {
+            "time": 2,
+            "light oil": 30,
+            "water": 30
+        },
+        "output": {
+            "petroleum gas": 20
+        }
+    },
+    "Solid fuel from light oil": {
+        "input": {
+            "time": 1,
+            "light oil": 10
+        },
+        "output": {
+            "solid fuel": 1
+        }
+    },
+    "Solid fuel from heavy oil": {
+        "input": {
+            "time": 1,
+            "heavy oil": 20
+        },
+        "output": {
+            "solid fuel": 1
+        }
+    },
+    "Solid fuel from petroleum gas": {
+        "input": {
+            "time": 1,
+            "petroleum gas": 20
+        },
+        "output": {
+            "solid fuel": 1
+        }
+    }
+}
