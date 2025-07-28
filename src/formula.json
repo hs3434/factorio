@@ -10,6 +10,14 @@
             "petroleum gas": 55
         }
     },
+    "Basic oil processing": {
+       "input": {
+            "time": 5,
+            "crude oil": 100
+        }, "output": {
+            "petroleum gas": 45
+        } 
+    },
     "Heavy oil cracking": {
         "input": {
             "time": 2,

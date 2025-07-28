@@ -1,23 +1,11 @@
 #!/bin/env python3
 import math
 import json
+import copy
 from pathlib import Path
+from .util import *
 
-
-formula_file = Path("formula.json")
-with open(formula_file, "r") as f:
-    formula = json.load(f, cls=json.JSONDecoder)
-
-
-def multiply_speed(obj: dict, speed: float) -> dict:
-    for key in obj.keys():
-        if type(obj[key]) is dict:
-            multiply_speed(obj[key], speed)
-        elif type(obj[key]) is int or type(obj[key]) is float:
-            obj[key] = obj[key] * speed
-    return obj
-
-
+        
 class MetaFactorial:
     def __init__(self, key=None, speed: float = 1, x_a: int = 1, y_a: int = 1,
                  x_b: int = 0, y_b: int = 0) -> None:
@@ -33,6 +21,7 @@ class MetaFactorial:
             formula[key]["output"], speed/formula[key]["input"]["time"])
         self.input = self.meta_input
         self.output = self.meta_output
+        self.suffix = []
 
     def deploy_area(self, x: int = 1, y: int = 1) -> int:
         self.x = x
