@@ -49,6 +49,58 @@ class FormulaDiGraph:
         # 初始化前驱节点字典（用于路径回溯）
         prev = {node: None for node in G}
         
+        stack = [(target, source, [], 1)]
+        while stack:
+            (target, current_node, current_path, current_product) = stack.pop()
+            dist = {current_node: current_product}
+            prev = {current_node: None}
+            result = (current_path, current_product)
+            if current_product < dist[current_node]:
+                continue
+            elif G.nodes[current_node].get("type", "") == "formula":
+                visited[current_node] = visited.get(source, 0) + 1
+                if visited[source] > 1:
+                    continue 
+                flag = 0
+                for pre in G.predecessors(current_node):
+                    if pre not in extra:
+                        flag = 1
+                        break
+                if flag:
+                    continue
+                paths = []
+                product = 0
+                for neighbor in G.successors(current_node):
+                    edge_weight = G[current_node][neighbor].get(weight, 1.0)
+                    edge_weight = current_product * edge_weight
+                    if neighbor == target:
+                        paths.append([neighbor])
+                        product += edge_weight
+                        result = (paths, product)
+                    else:
+                        stack.append((target, neighbor, current_path, edge_weight))
+                        if new_product < 0:
+                            continue
+                        else:
+                            new_product = new_product * edge_weight
+                            paths.append(path)
+                            product += new_product
+                if product > 0 and product > dist[target]:
+                    dist[target] = product
+                    if len(paths) == 1:
+                        paths = paths[0]
+                    prev[target] = {current_node: paths}
+            else:
+                for neighbor in G.successors(current_node):
+                    edge_weight = G[current_node][neighbor].get(weight, 1.0)
+                    edge_weight = current_product * edge_weight
+                    if edge_weight > dist[neighbor]:
+                        dist[neighbor] = edge_weight
+                        prev[neighbor] = current_node
+                        if neighbor != target:
+                            heapq.heappush(heap, (-edge_weight, neighbor))
+        
+            
         # 最大堆: [(-当前乘积, 当前节点)]
         heap = [(-1.0, source)]
         while heap:
