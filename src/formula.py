@@ -38,130 +38,63 @@ class FormulaDiGraph:
             for o in output:
                 self.g.add_edge(key, o, ratio=output[o])
     
-    def max_product(self, target: str, source: str, extra: set=None, weight="ratio", visited: dict=None):
+    def max_product(self, target: str, source: str, extra: set=set(), weight="ratio"):
         extra = set(extra)
         extra.add(source)
         G = self.g
-        # 初始化距离字典（记录最大乘积）
-        dist = {node: -1 for node in G}
-        dist[source] = 1.0  # 初始乘积为1
         
-        # 初始化前驱节点字典（用于路径回溯）
-        prev = {node: None for node in G}
-        
-        stack = [(target, source, [], 1)]
+        visited = {}
+        stack = [(False, source, [], 1, 0)]
         stack2 = []
         path = []
-        res_product = 0
+        res_product = -1
         while stack:
-            (target, current_node, current_path, current_product) = stack.pop()
-            dist = {current_node: current_product}
-            prev = {current_node: None}
+            (is_processed , current_node, current_path, current_product, res_n) = stack.pop()
             if current_node == target:
-                path = current_path
-                res_product = current_product
-            elif G.nodes[current_node].get("type", "") == "formula":
-                flag = [pre not in extra for pre in G.predecessors(current_node)]
-                if any(flag):
-                    continue
-                visited[current_node] = visited.get(current_node, 0) + 1
-                paths = []
-                products = 0
-                while stack2:
-                    (path, res_product) = stack2.pop()
-                    if res_product > 0:
-                        paths.append(path)
-                        products += res_product
-                if len(paths):
-                    if len(paths) > 1:
-                        path = current_path.extend(paths)
-                    else:
-                        path = current_path.extend(paths[0])
-                    res_product = products
-            else:
-                stack2.append((path, res_product))
-                successors = G.successors(current_node)
-                if successors:
-                    stack.append((target, current_node, current_path, current_product))
-                    for neighbor in G.successors(current_node):
-                        edge_weight = G[current_node][neighbor].get(weight, 1.0)
-                        product = current_product * edge_weight
-                        stack.append((target, neighbor, [neighbor], product))
-                path, res_product = [], -1
-
-
-            
-        # 最大堆: [(-当前乘积, 当前节点)]
-        heap = [(-1.0, source)]
-        while heap:
-            current_product_neg, current_node = heapq.heappop(heap)
-            current_product = -current_product_neg
-            # 跳过更差的路径
-            if current_product < dist[current_node]:
-                continue
-            if G.nodes[current_node].get("type", "") == "formula":
-                visited[current_node] = visited.get(source, 0) + 1
-                if visited[source] > 1:
-                    return [], -1
-                for pre in G.predecessors(current_node):
-                    if pre not in extra:
-                        continue
-                paths = []
-                product = 0
+                    path = current_path
+                    res_product = current_product
+                    stack2.append((path, res_product))
+            elif not is_processed:
+                # if G.nodes[current_node].get("type", "") == "formula":
+                #     flag = [pre not in extra for pre in G.predecessors(current_node)]
+                #     if any(flag):
+                #         path, res_product = [current_node], -1
+                #         continue
+                successors = list(G.successors(current_node))
+                res_n = len(successors)
+                stack.append((True, current_node, current_path, current_product, res_n))
                 for neighbor in G.successors(current_node):
                     edge_weight = G[current_node][neighbor].get(weight, 1.0)
-                    edge_weight = current_product * edge_weight
-                    if neighbor == target:
-                        paths.append([neighbor])
-                        product += edge_weight
-                    else:
-                        path, new_product = self.max_product(target, neighbor, extra, weight=weight)
-                        if new_product < 0:
-                            continue
-                        else:
-                            new_product = new_product * edge_weight
-                            paths.append(path)
-                            product += new_product
-                if product > 0 and product > dist[target]:
-                    dist[target] = product
-                    if len(paths) == 1:
-                        paths = paths[0]
-                    prev[target] = {current_node: paths}
+                    product = current_product * edge_weight
+                    stack.append((False, neighbor, [neighbor], product, 0))
             else:
-                for neighbor in G.successors(current_node):
-                    edge_weight = G[current_node][neighbor].get(weight, 1.0)
-                    edge_weight = current_product * edge_weight
-                    if edge_weight > dist[neighbor]:
-                        dist[neighbor] = edge_weight
-                        prev[neighbor] = current_node
-                        if neighbor != target:
-                            heapq.heappush(heap, (-edge_weight, neighbor))
-        
-        # 构建路径
-        path = []
-        if dist[target] < 0:
-            return path, -1
-        else:
-            current = target
-            while current is not None:
-                if isinstance(current, dict):
-                    key = list(current.keys())[0]
-                    lis = current[key]
-                    if lis and isinstance(lis[0], list):
-                        path.append(lis)
-                    else:
-                        lis.reverse()
-                        path += lis
-                    path.append(key)
-                    current = prev.get(key)
+                if G.nodes[current_node].get("type", "") == "formula":
+                    visited[current_node] = visited.get(current_node, 0) + 1
+                    tmp_path, tmp_product = [], 0
+                    while res_n > 0:
+                        res_n -= 1
+                        (path, res_product) = stack2.pop()
+                        if res_product > 0:
+                            tmp_path.append(path)
+                            tmp_product += res_product
+                    if len(tmp_path) > 1:
+                        current_path.extend(tmp_path)
+                    elif len(tmp_path) == 1:
+                        current_path.extend(tmp_path[0])
+                    stack2.append((current_path, tmp_product))
                 else:
-                    path.append(current)
-                    current = prev.get(current)
-        path.reverse()
-        path.pop()
-        return path, dist[target]
+                    tmp_path, tmp_product = [], -1
+                    while res_n > 0:
+                        res_n -= 1
+                        (path, res_product) = stack2.pop()
+                        if res_product > tmp_product:
+                            tmp_product = res_product
+                            tmp_path = path
+                    current_path.extend(tmp_path)
+                    stack2.append((current_path, tmp_product))
+        return stack2.pop()
         
-print(FormulaDiGraph().max_product("crude oil", "petroleum gas"))         
+print(FormulaDiGraph().max_product("petroleum gas", "crude oil", extra="water"))         
             
 # class Formula(FormulaDiGraph):
 #     def __init__(self, formula_key, ratio=1):
