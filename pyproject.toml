@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "python-bdtool"
+dynamic = ["version"]
+description = 'Some python tools for bioinformatics-development'
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "husheng", email = "hs3434.work@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "snakemake>=8.13.0"
+]
+[project.scripts]
+bdtool-touch = "bdtool.tool:touch"
+[tool.hatch.build.targets.wheel]
+packages = ["src/bdtool"]
+artifacts = ["src/bdtool/*"]
+
+[project.urls]
+Documentation = "https://github.com/husheng/python-bdtool#readme"
+Issues = "https://github.com/husheng/python-bdtool/issues"
+Source = "https://github.com/husheng/python-bdtool"
+
+[tool.hatch.version]
+path = "src/bdtool/__about__.py"
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+  "python-docx>=1.1.2"
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/bdtool tests}"
+
