@@ -7,6 +7,9 @@ from bs4 import BeautifulSoup
 import warnings
 # 忽略requests的安全警告（可选）
 # warnings.filterwarnings('ignore')
+
+formula_path = os.path.join(os.path.dirname(__file__), 'formula.json')
+
 default_headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -22,17 +25,21 @@ def deal_item(item: bs4.element.Tag):
         match2 = re.search(r"(.*)x(.*)", text2)
     num = float(match2.group(1))
     name = match2.group(2)
-    return {"name": name, "num": num, "speed": speed}
+    return {name: {"num": num, "speed": speed, "name": name}}
 
-def deal_formula(formula_section: bs4.element.Tag):
+def deal_formula(formula_section: bs4.element.Tag, type_str: str = "formula"):
     formula_item = formula_section.find_all("div", recursive=False)
     info = formula_item[0].find_all("div", recursive=False)
     name = info[0].get_text(strip=True).replace("替代：", "")
     by = re.search(r"\((.*?)\)", info[1].get_text(strip=True)).group(1)
     formula = formula_item[1].find_all("div",class_="col-6")
-    inputs = [deal_item(input) for input in formula[0].find_all("div", recursive=False)]
-    outputs = [deal_item(output) for output in formula[1].find_all("div", recursive=False)]
-    return {"name": name, "by": by, "inputs": inputs, "outputs": outputs}
+    inputs = {}
+    outputs = {}
+    for input in formula[0].find_all("div", recursive=False):
+        inputs.update(deal_item(input))
+    for output in formula[1].find_all("div", recursive=False):
+        outputs.update(deal_item(output))
+    return {"name": name, "by": by, "type": type_str, "inputs": inputs, "outputs": outputs}
         
         
 class SatisfactorySpider:
@@ -59,32 +66,35 @@ class SatisfactorySpider:
         
         ul_list = media_body.find_all('ul', class_='list-group')
         base_info["类别"] = ul_list[0].find("strong").get_text(strip=True)
-        text = ul_list[1].find("strong").get_text(strip=True).replace(",", "")
-        if len(ul_list) == 3:
-            if "MJ" in text:
-                base_info["能量"] = int(text.replace("MJ", ""))
-            else:
-                base_info["堆叠数量"] = int(text)
-            text = ul_list[2].find("strong").get_text(strip=True).replace(",", "")
-        try:
-            base_info["资源槽点数"] = int(text)
-        except:
-            base_info["资源槽点数"] = text
-        
+        pattern1 = re.compile(r'堆叠数量(\d+)')
+        pattern2 = re.compile(r'能量(\d+)MJ')
+        pattern3 = re.compile(r'资源槽点数(.*)')
+        for ul in ul_list[1:]:
+            text = ul.get_text(strip=True).replace(",", "")
+            if pattern1.search(text):
+                base_info["堆叠数量"] = int(pattern1.search(text).group(1))
+            elif pattern2.search(text):
+                base_info["能量"] = int(pattern2.search(text).group(1))
+            elif pattern3.search(text):
+                base_info["资源槽点数"] = pattern3.search(text).group(1)
+                try:
+                    base_info["资源槽点数"] = int(base_info["资源槽点数"])
+                except:
+                    pass
+
+
         # formula        
         formula_all = main.find_all("div", recursive=False)[2].find_all("div", recursive=False)
+        formula_list = []
         if len(formula_all) == 2:
-            formula_list = [deal_formula(formula_section) for formula_section in formula_all[0].find_all("div",class_="card-body")]
-            replace_formula_list = [deal_formula(formula_section) for formula_section in formula_all[1].find_all("div",class_="card-body")]
+            formula_list += [deal_formula(formula_section, type_str="formula") for formula_section in formula_all[0].find_all("div",class_="card-body")]
+            formula_list += [deal_formula(formula_section, "replace_formula") for formula_section in formula_all[1].find_all("div",class_="card-body")]
         elif len(formula_all) == 1 and formula_all[0].get_text(strip=True):
-            formula_list = [deal_formula(formula_section) for formula_section in formula_all[0].find_all("div",class_="card-body")]
-            replace_formula_list = None
+            formula_list += [deal_formula(formula_section) for formula_section in formula_all[0].find_all("div",class_="card-body")]
         else:
-            formula_list = None
-            replace_formula_list = None
             print(f"{item_name} 没有公式")
         
-        return {"base_info": base_info, "formula_list": formula_list, "replace_formula_list": replace_formula_list}
+        return {"base_info": base_info, "formula_list": formula_list}
         
     def get_item_info(self, item_name):
         if item_name not in self.items_path:
@@ -164,5 +174,5 @@ class SatisfactorySpider:
 if __name__ == "__main__":
     spider = SatisfactorySpider()
     spider.get_all_formula()
-    with open('formula.json', 'w', encoding='utf-8') as f:
+    with open(formula_path, 'w', encoding='utf-8') as f:
         json.dump(spider.all_formula, f, ensure_ascii=False, indent=4)
