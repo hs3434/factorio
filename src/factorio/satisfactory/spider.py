@@ -30,7 +30,7 @@ def deal_item(item: bs4.element.Tag):
 def deal_formula(formula_section: bs4.element.Tag, type_str: str = "formula"):
     formula_item = formula_section.find_all("div", recursive=False)
     info = formula_item[0].find_all("div", recursive=False)
-    name = info[0].get_text(strip=True).replace("替代：", "")
+    name = info[0].get_text(strip=True).replace("替代: ", "")
     by = re.search(r"\((.*?)\)", info[1].get_text(strip=True)).group(1)
     formula = formula_item[1].find_all("div",class_="col-6")
     inputs = {}
