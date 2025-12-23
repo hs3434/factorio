@@ -68,10 +68,11 @@ class FormulaDiGraph:
         result = {}
         need = {}
         visited = set()
+        stack = [(0, 1, target)]
         while heap:
-            curr_min_reciprocal, node = heapq.heappop(heap)
+            curr_num, node = heapq.heappop(heap)
             visited.add(node)
-            
+             
             # 遍历父节点（直接用预构建的映射）
             for parent, _, data in g.in_edges(node, data=True):
                 new_reciprocal = curr_min_reciprocal * (1/data[weight])
@@ -85,5 +86,53 @@ class FormulaDiGraph:
                         continue
                     heapq.heappush(heap, (new_reciprocal, parent))
         return dp, info    
-        
+    def search_path(self, target: str, is_source: Callable[[nx.DiGraph, str], bool] = is_base_type, weight="ratio"):
+        g = self.g
+        current_path = nx.DiGraph()
+        # stack: is_processed, [current_node, current_path]
+        stack: list[tuple[bool, list]] = [(False, [target, current_path, dict()])]
+        stack2 = []
+        path = []
+        res_product = -1
+        while stack:
+            is_processed , current_stack = stack.pop()
+            current_node, current_path, rest = current_stack
+            if is_source(g, current_node):
+                    path = current_path
+                    res_product = current_product
+                    stack2.append((path, res_product))
+            elif not is_processed:
+                stack.append((True, current_stack))
+                current_path.a
+                for neighbor in g.in_edges(current_node):
+                    edge_weight = G[current_node][neighbor].get(weight, 1.0)
+                    product = current_product * edge_weight
+                    stack.append((False, neighbor, [neighbor], product, 0))
+            else:
+                if G.nodes[current_node].get("type", "") == "formula":
+                    visited[current_node] = visited.get(current_node, 0) + 1
+                    tmp_path, tmp_product = [], 0
+                    while res_n > 0:
+                        res_n -= 1
+                        (path, res_product) = stack2.pop()
+                        if res_product > 0:
+                            tmp_path.append(path)
+                            tmp_product += res_product
+                    if len(tmp_path) > 1:
+                        current_path.extend(tmp_path)
+                    elif len(tmp_path) == 1:
+                        current_path.extend(tmp_path[0])
+                    stack2.append((current_path, tmp_product))
+                else:
+                    tmp_path, tmp_product = [], -1
+                    while res_n > 0:
+                        res_n -= 1
+                        (path, res_product) = stack2.pop()
+                        if res_product > tmp_product:
+                            tmp_product = res_product
+                            tmp_path = path
+                    current_path.extend(tmp_path)
+                    stack2.append((current_path, tmp_product))
+        return stack2.pop()
+       
 formula = FormulaDiGraph()
