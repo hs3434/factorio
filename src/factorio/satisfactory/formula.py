@@ -18,10 +18,8 @@ priority = {
 
 def is_base_type(g: nx.DiGraph, node: str) -> bool:
     base_info = g.nodes[node].get("base_info", None)
-    if base_info is None:
-        return False
-    else:
-        return base_info["类别"] == "矿石" or base_info["name"] == "水"
+    base_type = {'SAM物质', '水', '煤', '石灰石', '硫磺', '粗石英', '钦金矿石', '铀', '铁矿石', '铜矿石', '铝土矿', "原油", "氮气"}
+    return base_info is not None and base_info.get("name", "") in base_type
 
 def stack_recursion_process(current_stack: list, enter_stack: Callable[[list], list[list]], exit_stack: Callable[[list], None] ):
     stack: list[tuple[bool, list]] = [(False, current_stack)]
@@ -184,15 +182,18 @@ class RecipeGNN(nn.Module):
         G: nx.DiGraph, target_item: str,
     ):
         super(RecipeGNN, self).__init__()
-        # 加载图解析结果
         self.G = G
         self.target_item = target_item
         self.parse_recipe_graph()
-        # 1. 配方权重（固定）
+        # 1. 固定权重矩阵
         self.fixed_weight_matrix = torch.tensor(self.weight_matrix, dtype=torch.float32, requires_grad=False)
-
-        # 2. 配方节点权重（可训练，学习配方优先级）
+        # 2. 可训练配方权重（初始值为1，无约束）
         self.formula_weights = nn.Parameter(torch.full([self.formula_num], fill_value=1, dtype=torch.float32))
+        # 3. 定义非负激活函数（Softplus 平滑非负，推荐；也可使用 ReLU）
+        # nn.Softplus(beta=10)：推荐，输出为 ln(1 + e^(beta*x))，平滑非负，梯度始终存在，训练更稳定。
+        # nn.ReLU()：备选，输出 max(0, x)，简单高效，但当 x<=0 时梯度为 0，可能导致权重无法更新。
+        self.non_neg_activation = nn.Softplus(beta=10)  # beta越大，越接近 ReLU
+        # self.non_neg_activation = nn.ReLU()  # 备选，简单但在0点梯度为0
 
         self.resource_change = torch.full([self.item_num], fill_value=0, dtype=torch.float32)
 
@@ -204,8 +205,8 @@ class RecipeGNN(nn.Module):
         """解析nx.DiGraph配方图，提取核心信息（复用，新增循环相关标记）"""
         G = self.G
         target_item = self.target_item
-        item_nodes = set([n for n in G.nodes if G.nodes[n]['type'] == 'item'])
-        formula_nodes = set([n for n in G.nodes if G.nodes[n]['type'] == 'formula'])
+        item_nodes = set([n for n in G.nodes if G.nodes[n].get('type', "item") == 'item'])
+        formula_nodes = set([n for n in G.nodes if G.nodes[n].get('type', "item") == 'formula'])
         base_resources = set([n for n in item_nodes if is_source(G, n)])
 
         if target_item not in item_nodes:
@@ -232,8 +233,11 @@ class RecipeGNN(nn.Module):
                     node_idx = item2idx[node]
                     weight_matrix[node_idx, idx] = rest[node]
 
+        self.base_resources = base_resources
         self.base_idxs = [item2idx[base] for base in base_resources]
         self.target_idx = item2idx[target_item]
+        self.idx2formula = idx2formula
+        self.idx2item = idx2item
         
         self.weight_matrix = weight_matrix
         self.formula_num = len(formula_nodes)
@@ -244,16 +248,14 @@ class RecipeGNN(nn.Module):
         """
         获取各资源单位时间增减数量张量
         """
-        self.resource_change = self.fixed_weight_matrix @ self.formula_weights
+        non_neg_formula_weights = self.non_neg_activation(self.formula_weights)
+        self.resource_change = self.fixed_weight_matrix @ non_neg_formula_weights
         return self.resource_change
 
     def recipe_loss_fn(
         self,
-        resource_change: torch.Tensor,
-        target_base_ratio: torch.Tensor,  # 基础资源的目标配比
         lambda_target: float = 10.0,      # 目标物料的损失权重（优先级最高）
-        lambda_base_ratio: float = 5.0,   # 基础资源配比的损失权重
-        lambda_base_max: float = 1.0,     # 基础资源最大化的损失权重
+        lambda_base_max: float = 0.01,     # 基础资源最大化的损失权重
         lambda_other_pos: float = 2.0,     # 其他资源大于0的损失权重
         target_num = 1
     ) -> tuple[torch.Tensor, dict]:
@@ -268,25 +270,18 @@ class RecipeGNN(nn.Module):
             total_loss: 总损失（可反向传播优化）
         """
         resource_change = self.resource_change
-        # -------------------------- 损失项1：目标物料趋近1（核心目标） --------------------------
+        # -------------------------- 损失项1：目标物料趋近target_num（核心目标） --------------------------
         target_change = resource_change[self.target_idx]
         loss_target = torch.nn.functional.mse_loss(target_change, torch.tensor(target_num, dtype=torch.float32))
 
-        # -------------------------- 损失项2：基础资源尽可能大 --------------------------
+        # -------------------------- 损失项2：基础资源尽可能消耗少 --------------------------
         # 提取基础资源的增减量 [len(base_resources),]
         base_change = resource_change[self.base_idxs]
-        # 目标：最大化 base_change → 损失函数中最小化 (-base_change) 的均值（越大，损失越小）
-        loss_base_max = -torch.mean(base_change)  # 若base_change为负，-base_change为正，均值越大表示base_change越小（惩罚）
+        mask = (base_change < 0).float()
+        # 目标：因为base_change为负值表示消耗，所以应该最大化 base_change → 损失函数中最小化 (-base_change) 的均值（越大，损失越小）
+        loss_base_max = -torch.mean(mask * base_change * self.scaled_base_weight)  # 若base_change为负，-base_change为正，均值越大表示base_change越小（惩罚）
 
-        # -------------------------- 损失项3：基础资源接近给定配比 --------------------------
-        # 对基础资源增减量做归一化（得到相对比例），再与目标配比计算MSE
-        # 防止除0：添加微小epsilon
-        base_change_sum = torch.clamp(torch.sum(torch.abs(base_change)), min=1e-8)
-        base_change_ratio = torch.abs(base_change) / base_change_sum  # 归一化后的配比（非负）
-        # 确保 target_base_ratio 形状匹配
-        loss_base_ratio = torch.nn.functional.mse_loss(base_change_ratio, target_base_ratio)
-
-        # -------------------------- 损失项4：其他资源大于0（非基础、非目标） --------------------------
+        # -------------------------- 损失项3：其他资源大于0（非基础、非目标） --------------------------
         # 提取其他资源的索引：非基础 + 非目标
 
         other_change = self.resource_change[self.non_base_idx]
@@ -297,7 +292,6 @@ class RecipeGNN(nn.Module):
         # -------------------------- 总损失：加权组合 --------------------------
         total_loss = (
             lambda_target * loss_target
-            + lambda_base_ratio * loss_base_ratio
             + lambda_base_max * loss_base_max
             + lambda_other_pos * loss_other_pos
         )
@@ -306,15 +300,34 @@ class RecipeGNN(nn.Module):
         return total_loss, {
             'loss_target': loss_target.item(),
             'loss_base_max': loss_base_max.item(),
-            'loss_base_ratio': loss_base_ratio.item(),
             'loss_other_pos': loss_other_pos.item()
         }
 
+    def init_train_weight(self, base_weight: dict):
+        min_val, max_val = 0, 1
+        target_base_weight = {key: 1 for key in self.base_resources}
+        for key, value in base_weight.items():
+            if key in self.base_resources:
+                target_base_weight[key] = value
+        target_base_weight = torch.tensor(list(target_base_weight.values()), dtype=torch.float32)
+        # 计算当前权重的最小值和最大值（添加epsilon避免除0）
+        weight_min = torch.clamp(torch.min(target_base_weight), min=1e-8)
+        weight_max = torch.clamp(torch.max(target_base_weight), min=1e-8)
+        # 最小-最大缩放：将权重缩放到 [min_val, max_val]
+        scaled_weight = (target_base_weight - weight_min) / (weight_max - weight_min) * (max_val - min_val) + min_val
+        self.base_weight = base_weight
+        self.scaled_base_weight = scaled_weight
+            
+            
     def train_recipe_gnn(self,
-        target_base_ratio: np.ndarray,
+        base_weight: dict,
         epochs: int = 1000,
         lr: float = 0.01,
-        print_interval: int = 100
+        print_interval: int = 100,
+        lambda_target = 10.0,      # 目标物料的损失权重（优先级最高）
+        lambda_base_max = 0.1,     # 基础资源最大化的损失权重
+        lambda_other_pos = 10.0,     # 其他资源大于0的损失权重
+        target_num = 1
     ) -> None:
         """
         训练配方GNN模型
@@ -326,26 +339,22 @@ class RecipeGNN(nn.Module):
             """
         # 1. 配置优化器（仅优化可训练参数 formula_weights）
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-
-        # 2. 转换目标配比为torch张量（确保形状匹配）
-        target_base_ratio_tensor = torch.tensor(target_base_ratio, dtype=torch.float32)
-        assert len(target_base_ratio_tensor) == len(model.base_idxs), \
-            f"目标配比长度{len(target_base_ratio_tensor)}与基础资源数量{len(model.base_idxs)}不匹配"
-
+        self.init_train_weight(base_weight)
         # 3. 训练循环
-        model.train()  # 切换到训练模式
+        self.train()  # 切换到训练模式
         for epoch in range(epochs):
             # 梯度清零
             optimizer.zero_grad()
 
             # 前向传播：获取资源增减量
-            resource_change = model()
+            resource_change = self.forward()
 
             # 计算损失
-            total_loss, loss_details = recipe_loss_fn(
-                model=model,
-                resource_change=resource_change,
-                target_base_ratio=target_base_ratio_tensor
+            total_loss, loss_details = self.recipe_loss_fn(
+                lambda_target = lambda_target,      # 目标物料的损失权重（优先级最高）
+                lambda_base_max = lambda_base_max,     # 基础资源最大化的损失权重
+                lambda_other_pos = lambda_other_pos,     # 其他资源大于0的损失权重
+                target_num = target_num
             )
 
             # 反向传播 + 参数更新
@@ -358,63 +367,38 @@ class RecipeGNN(nn.Module):
                 print(f"  总损失：{total_loss.item():.4f}")
                 print(f"  目标物料损失：{loss_details['loss_target']:.4f}")
                 print(f"  基础资源最大化损失：{loss_details['loss_base_max']:.4f}")
-                print(f"  基础资源配比损失：{loss_details['loss_base_ratio']:.4f}")
                 print(f"  其他资源非负损失：{loss_details['loss_other_pos']:.4f}")
                 # 打印关键指标
-                target_change = resource_change[model.target_idx].item()
-                base_changes = resource_change[model.base_idxs].detach().numpy()
+                target_change = resource_change[self.target_idx].item()
+                base_changes = resource_change[self.base_idxs].detach().numpy()
+                base_ratio = base_changes / np.sum(np.abs(base_changes))
                 print(f"  目标物料增减量：{target_change:.4f}（目标：1.0）")
                 print(f"  基础资源增减量：{base_changes}")
-                print(f"  基础资源当前配比：{base_changes / np.sum(np.abs(base_changes)):.4f}")
+                print(f"  基础资源当前配比：{base_ratio.round(4)}")
                 print("-" * 50)
 
         print("训练完成！")
         # 输出最终配方权重
-        final_formula_weights = model.formula_weights.detach().numpy()
-        formula2idx = model.formula2idx
-        idx2formula = {v: k for k, v in formula2idx.items()}
+        self.final_formula_weights = self.formula_weights.detach().numpy()
         print("\n最终配方权重：")
-        for idx in range(len(final_formula_weights)):
-            formula_name = idx2formula[idx]
-            weight = final_formula_weights[idx]
+        for idx in range(len(self.final_formula_weights)):
+            formula_name = self.idx2formula[idx]
+            weight = self.final_formula_weights[idx]
             print(f"  {formula_name}: {weight:.4f}")
 
 # -------------------------- 测试代码（可验证运行） --------------------------
 if __name__ == "__main__":
+    base_weight={
+        "水": 0, "铁矿石": 1/921, "石灰石": 1/693, "铜矿石": 1/369, "钦金矿石": 1/150, "煤": 1/423,
+        "原油": 1/126, "硫磺": 1/108, "铝土矿": 1/123, "粗石英": 1/135, "铀": 1/21, "SAM物质": 1/102, "氮气": 1/120
+    }
     # 1. 构建示例配方图
-    G = nx.DiGraph()
-    # 添加物料节点
-    item_list = ["A", "B", "C", "D", "马达"]  # 马达：目标节点；A/B：基础资源；C/D：非基础物料
-    for item in item_list:
-        is_base = item in ["A", "B"]
-        G.add_node(item, type="item", is_base=is_base)
-    # 添加配方节点
-    formula_list = ["F1", "F2", "F3"]
-    for formula in formula_list:
-        G.add_node(formula, type="formula")
-    # 添加有向边（带weight）
-    # F1: A + B → C（输入A/B，输出C）
-    G.add_edge("A", "F1", speed=1.0)
-    G.add_edge("B", "F1", speed=1.0)
-    G.add_edge("F1", "C", speed=2.0)
-    # F2: C → D（输入C，输出D）
-    G.add_edge("C", "F2", speed=1.0)
-    G.add_edge("F2", "D", speed=1.0)
-    # F3: D + B → 马达 + A（输入D/B，输出马达/A，形成环）
-    G.add_edge("D", "F3", speed=1.0)
-    G.add_edge("B", "F3", speed=1.0)
-    G.add_edge("F3", "马达", speed=1.0)
-    G.add_edge("F3", "A", speed=0.5)
-
-    # 2. 解析配方图
-    target_item = "马达"
-    parse_result = parse_recipe_graph(G, target_item=target_item, is_source=is_base_type)
-
-    # 3. 初始化模型
-    model = ReasonableCycleRecipeGNN(parse_result)
-
-    # 4. 定义基础资源目标配比（A:0.4，B:0.6）
-    target_base_ratio = np.array([0.4, 0.6])  # 对应基础资源A、B
-
-    # 5. 训练模型
-    train_recipe_gnn(model, target_base_ratio, epochs=2000, lr=0.005, print_interval=200)
+    model = RecipeGNN(formula.g, target_item = "马达")
+    
+    model.train_recipe_gnn(
+        base_weight=base_weight,
+        epochs=2000, lr=0.005, print_interval=200,
+        lambda_target=1,
+        lambda_base_max=0.01,
+        lambda_other_pos=1000
+    )
