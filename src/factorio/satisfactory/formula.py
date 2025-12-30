@@ -248,8 +248,8 @@ class RecipeGNN(nn.Module):
         """
         获取各资源单位时间增减数量张量
         """
-        non_neg_formula_weights = self.non_neg_activation(self.formula_weights)
-        self.resource_change = self.fixed_weight_matrix @ non_neg_formula_weights
+        self.non_neg_formula_weights = self.non_neg_activation(self.formula_weights)
+        self.resource_change = self.fixed_weight_matrix @ self.non_neg_formula_weights
         return self.resource_change
 
     def recipe_loss_fn(
@@ -379,7 +379,7 @@ class RecipeGNN(nn.Module):
 
         print("训练完成！")
         # 输出最终配方权重
-        self.final_formula_weights = self.formula_weights.detach().numpy()
+        self.final_formula_weights = self.non_neg_formula_weights.detach().numpy()
         print("\n最终配方权重：")
         for idx in range(len(self.final_formula_weights)):
             formula_name = self.idx2formula[idx]
