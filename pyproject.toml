@@ -24,8 +24,35 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = []
-
+dependencies = [
+  "click>=8.0.0",
+  "beautifulsoup4>=4.14.0",
+  "networkx>=2.3.0",
+  "numpy>=2.3.0",
+  "torch>=2.6.0",
+  "requests>=2.32.0",
+]
+[project.optional-dependencies]
+# 分组1：建议的解析器（搭配beautifulsoup4使用，非强制但推荐）
+recommended = [
+  "lxml>=4.9.0",  # bs4的高效解析器，建议安装
+  "html5lib>=1.1",  # 兼容老旧HTML的解析器，备选推荐
+]
+# 分组2：开发/测试依赖（开发者或需要运行测试的用户安装）
+dev = [
+  "ipython>=9.0.0",
+  "pytest>=7.0.0",
+  "black>=24.0.0",
+  "flake8>=6.0.0",
+  "hatch>=1.16.0",
+  "hatchling>=1.28.0",
+]
+# 分组3：完整功能依赖（需要使用包的全部功能时安装）
+full = [
+  "lxml>=4.9.0",
+  "pytest>=7.0.0",
+  "matplotlib>=3.7.0",
+]
 [project.urls]
 Documentation = "https://github.com/hs3434/factorio#readme"
 Issues = "https://github.com/hs3434/factorio/issues"
