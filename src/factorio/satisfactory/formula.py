@@ -186,6 +186,7 @@ class RecipeGNN(nn.Module):
         super(RecipeGNN, self).__init__()
         self.G = G
         self.target_item = target_item
+        self.epsilon = 1e-8
         self.parse_recipe_graph()
         # 1. 固定权重矩阵
         self.fixed_weight_matrix = torch.tensor(self.weight_matrix, dtype=torch.float32, requires_grad=False, device=self.device)
@@ -264,24 +265,31 @@ class RecipeGNN(nn.Module):
         """
         多目标损失函数设计
         参数：
-            model: 配方GNN模型
-            resource_change: 模型输出的资源增减量 [item_num,]
-            target_base_ratio: 基础资源的目标配比 [len(base_resources),]
-            lambda_*: 各损失项的加权系数（可根据业务调整优先级）
+            lambda_target: 目标物料的损失权重（优先级最高，指数递增）
+            lambda_base_max: 基础资源最大化的损失权重（线性递增）
+            lambda_other_pos: 其他资源大于0的损失权重（线性递增）
+            target_num: 目标物料的数量
         返回：
             total_loss: 总损失（可反向传播优化）
         """
         resource_change = self.resource_change
         # -------------------------- 损失项1：目标物料趋近target_num（核心目标） --------------------------
         target_change = resource_change[self.target_idx]
-        loss_target = torch.nn.functional.mse_loss(target_change, torch.tensor(target_num, dtype=torch.float32).to(device))
+        target_num = torch.tensor(target_num, dtype=torch.float32).to(self.device)
+        target_ratio = target_num / (target_change + self.epsilon)
+        # 步骤2：计算对数偏差（对称，非负）
+        log_error = torch.abs(torch.log(target_ratio))
+        # 步骤3：计算指数损失，减1保证偏差为0时损失为0
+        loss_target = torch.exp(lambda_target * log_error) - 1
 
         # -------------------------- 损失项2：基础资源尽可能消耗少 --------------------------
         # 提取基础资源的增减量 [len(base_resources),]
         base_change = resource_change[self.base_idxs]
         mask = (base_change < 0).float()
         # 目标：因为base_change为负值表示消耗，所以应该最大化 base_change → 损失函数中最小化 (-base_change) 的均值（越大，损失越小）
-        loss_base_max = -torch.mean(mask * base_change * self.scaled_base_weight)  # 若base_change为负，-base_change为正，均值越大表示base_change越小（惩罚）
+        base_change_norm = torch.nn.functional.normalize(mask * base_change, p=2, dim=0, eps=self.epsilon)
+        # 步骤2：用归一化后的数值计算损失，梯度幅值将固定
+        loss_base_max = -torch.mean(base_change_norm * self.scaled_base_weight)
 
         # -------------------------- 损失项3：其他资源大于0（非基础、非目标） --------------------------
         # 提取其他资源的索引：非基础 + 非目标
@@ -293,7 +301,7 @@ class RecipeGNN(nn.Module):
 
         # -------------------------- 总损失：加权组合 --------------------------
         total_loss = (
-            lambda_target * loss_target
+            loss_target
             + lambda_base_max * loss_base_max
             + lambda_other_pos * loss_other_pos
         )
@@ -313,8 +321,8 @@ class RecipeGNN(nn.Module):
                 target_base_weight[key] = value
         target_base_weight = torch.tensor(list(target_base_weight.values()), dtype=torch.float32)
         # 计算当前权重的最小值和最大值（添加epsilon避免除0）
-        weight_min = torch.clamp(torch.min(target_base_weight), min=1e-8)
-        weight_max = torch.clamp(torch.max(target_base_weight), min=1e-8)
+        weight_min = torch.clamp(torch.min(target_base_weight), min=self.epsilon)
+        weight_max = torch.clamp(torch.max(target_base_weight), min=self.epsilon)
         # 最小-最大缩放：将权重缩放到 [min_val, max_val]
         scaled_weight = (target_base_weight - weight_min) / (weight_max - weight_min) * (max_val - min_val) + min_val
         self.base_weight = base_weight
@@ -391,22 +399,125 @@ class RecipeGNN(nn.Module):
         for idx in range(len(self.final_formula_weights)):
             formula_name = self.idx2formula[idx]
             weight = self.final_formula_weights[idx]
-            print(f"  {formula_name}: {weight:.4f}")
+            if weight > 0.001:
+                print(f"  {formula_name}: {weight:.4f}")
 
-# -------------------------- 测试代码（可验证运行） --------------------------
-if __name__ == "__main__":
-    from factorio.satisfactory.formula import formula, nx, RecipeGNN
-    base_weight={
-        "水": 0, "铁矿石": 1/921, "石灰石": 1/693, "铜矿石": 1/369, "钦金矿石": 1/150, "煤": 1/423,
-        "原油": 1/126, "硫磺": 1/108, "铝土矿": 1/123, "粗石英": 1/135, "铀": 1/21, "SAM物质": 1/102, "氮气": 1/120
-    }
-    # 1. 构建示例配方图
-    model = RecipeGNN(formula.g, target_item = "镄燃料棒")
-    
-    model.train_recipe_gnn(
-        base_weight=base_weight,
-        epochs=20000, lr=0.005, print_interval=200,
-        lambda_target=1,
-        lambda_base_max=0.01,
-        lambda_other_pos=1000
-    )
+
+
+import torch
+import torch.nn as nn
+import torch_geometric.nn as pyg_nn
+from torch_geometric.data import HeteroData
+import networkx as nx
+
+class RecipeGNN_V2(RecipeGNN):
+    def __init__(self, G: nx.DiGraph, target_item: str, device=device):
+        super(RecipeGNN, self).__init__()
+        self.device = device
+        self.G = G
+        self.target_item = target_item
+        self.epsilon = 1e-8
+        # 1. 解析图数据,构建异构图数据,预构建配方-物料增减矩阵
+        self.parse_recipe_graph()
+        # 2. 异构图卷积层
+        self.conv1 = pyg_nn.HeteroConv({
+            ('item', 'used_in', 'formula'): pyg_nn.GATConv(-1, 64, add_self_loops=False),
+            ('formula', 'produces', 'item'): pyg_nn.GATConv(-1, 64, add_self_loops=False),
+        }, aggr='sum').to(self.device)
+        self.conv2 = pyg_nn.HeteroConv({
+            ('item', 'used_in', 'formula'): pyg_nn.GATConv(64, 32, add_self_loops=False),
+            ('formula', 'produces', 'item'): pyg_nn.GATConv(64, 32, add_self_loops=False),
+        }, aggr='sum').to(self.device)
+        # 3. 配方权重预测层
+        self.formula_weight_head = nn.Sequential(
+            nn.Linear(32, 16),
+            nn.ReLU(),
+            nn.Linear(16, 1),
+            nn.Softplus(beta=10)
+        ).to(self.device)
+
+    def parse_recipe_graph(
+            self,
+            is_source: Callable[[nx.DiGraph, str], bool] = is_base_type,
+            weight="speed"
+        ):
+        """解析图数据"""
+        G = self.G
+        target_item = self.target_item
+        hetero_data = HeteroData()
+        item_nodes = [n for n in G.nodes if G.nodes[n].get('type', "item") == 'item']
+        formula_nodes = [n for n in G.nodes if G.nodes[n].get('type', "") == 'formula']
+        base_resources = set([n for n in item_nodes if is_source(G, n)])
+
+        if target_item not in item_nodes:
+            raise ValueError(f"目标节点{target_item}不是物料节点")
+        if target_item in base_resources:
+            raise ValueError(f"目标节点{target_item}是基础资源")
+
+        item_num = len(item_nodes)
+        formula_num = len(formula_nodes)
+        item2idx = {n: i for i, n in enumerate(item_nodes)}
+        formula2idx = {n: i for i, n in enumerate(formula_nodes)}
+        idx2item = {i: n for n, i in item2idx.items()}
+        idx2formula = {i: n for n, i in formula2idx.items()}
+        non_base_items = set([n for n in item_nodes if n not in base_resources])
+        non_base_idx = [item2idx[item] for item in non_base_items]
+        weight_matrix = np.zeros((item_num, formula_num), dtype=np.float32)
+        
+        hetero_data['item'].num_nodes = item_num
+        hetero_data['formula'].num_nodes = formula_num
+        hetero_data['item'].name2idx = item2idx
+        hetero_data['formula'].name2idx = formula2idx
+        
+        # 构建边
+        item_to_formula_edges = []
+        formula_to_item_edges = []
+        for formula in formula_nodes:
+            rest = {}
+            idx = formula2idx[formula]
+            for node, _, data in G.in_edges(formula, data=True):
+                rest[node] = rest.get(node, 0) -  data.get(weight, 0)
+            for _, node, data in G.out_edges(formula, data=True):
+                rest[node] = rest.get(node, 0) +  data.get(weight, 0)
+            for node in rest:
+                if rest[node] < 0:
+                    item_to_formula_edges.append((hetero_data['item'].name2idx[node], hetero_data['formula'].name2idx[formula]))
+                else:
+                    formula_to_item_edges.append((hetero_data['formula'].name2idx[formula], hetero_data['item'].name2idx[node]))
+                if node in item2idx:
+                    node_idx = item2idx[node]
+                    weight_matrix[node_idx, idx] = rest[node]
+        hetero_data['item', 'used_in', 'formula'].edge_index = torch.tensor(item_to_formula_edges).t().contiguous().to(self.device)
+        hetero_data['formula', 'produces', 'item'].edge_index = torch.tensor(formula_to_item_edges).t().contiguous().to(self.device)
+        # 初始化节点特征
+        hetero_data['item'].x = torch.ones(len(item_nodes), 32).to(self.device)
+        hetero_data['formula'].x = torch.ones(len(formula_nodes), 32).to(self.device)
+        
+        self.base_resources = base_resources
+        self.base_idxs = [item2idx[base] for base in base_resources]
+        self.target_idx = item2idx[target_item]
+        self.idx2formula = idx2formula
+        self.idx2item = idx2item
+        
+        self.formula_num = formula_num
+        self.item_num = item_num
+        self.non_base_idx = non_base_idx
+        
+        self.target_idx = item2idx[target_item]
+        self.hetero_data = hetero_data
+        self.fixed_weight_matrix = torch.tensor(weight_matrix, dtype=torch.float32, requires_grad=False, device=self.device)
+
+
+    def forward(self):
+        # 图卷积消息传递：捕捉配方-物料依赖关系
+        x_dict = self.conv1(self.hetero_data.x_dict, self.hetero_data.edge_index_dict)
+        x_dict = {k: torch.relu(v) for k, v in x_dict.items()}
+        x_dict = self.conv2(x_dict, self.hetero_data.edge_index_dict)
+        x_dict = {k: torch.relu(v) for k, v in x_dict.items()}
+        # 预测配方权重（非负）
+        self.formula_features = x_dict['formula']  # [formula_num, 32]
+        formula_weights = self.formula_weight_head(self.formula_features).squeeze(-1)  # [formula_num]
+        self.non_neg_formula_weights = formula_weights
+        # 计算资源增减量
+        self.resource_change = self.fixed_weight_matrix @ self.non_neg_formula_weights
+        return self.resource_change
