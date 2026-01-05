@@ -438,8 +438,10 @@ class RecipeGNN_V3(nn.Module):
         idx2item = {i: n for n, i in item2idx.items()}
         idx2formula = {i: n for n, i in formula2idx.items()}
 
-        weight_matrix = np.zeros((len(item_nodes), len(formula_nodes)), dtype=np.float32)
-                    
+        formula_weight_matrix = np.zeros((len(item_nodes), len(formula_nodes)), dtype=np.float32)
+        """m * n 的权重矩阵，m是物料数量，n是配方数量"""
+        
+        item_weight_matrix =    
         for formula in formula_nodes:
             rest = {}
             idx = formula2idx[formula]
@@ -450,7 +452,7 @@ class RecipeGNN_V3(nn.Module):
             for node in rest:
                 if node in item2idx:
                     node_idx = item2idx[node]
-                    weight_matrix[node_idx, idx] = rest[node]
+                    formula_weight_matrix[node_idx, idx] = rest[node]
 
         self.item_nodes = item_nodes
         self.formula_nodes = formula_nodes
@@ -519,7 +521,7 @@ class RecipeGNN_V3(nn.Module):
             elif isinstance(weights, torch.Tensor):
                 if len(weights.shape) != 1:
                     raise ValueError("weights must be a 1-D array.")
-                idx = torch.nonzero(weights).tolist()
+                idx = torch.nonzero(weights, as_tuple=True)[0].tolist()
             else:
                 raise TypeError("weights must be a numpy.ndarray or torch.Tensor.")
             return {item_list[id]:weights[id] for id in idx}

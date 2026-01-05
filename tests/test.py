@@ -6,9 +6,10 @@ if __name__ == "__main__":
         "原油": 1/126, "硫磺": 1/108, "铝土矿": 1/123, "粗石英": 1/135, "铀": 1/21, "SAM物质": 1/102, "氮气": 1/120
     }
     target_weight={
-        "奇点电池": 1,
-        "镄燃料棒": 2
+        "聚合树脂": 1,
+        "重油残渣": 2
     }
+    model = RecipeGNN_V3(formula.g, target_weight)
     # 1. 构建示例配方图
     model = RecipeGNN(formula.g, target_item = "镄燃料棒")
     
