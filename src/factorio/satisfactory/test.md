@@ -6,3 +6,7 @@
 
 那么推广到向量$y_{|m}$，有$\beta=\sum^{m}{\alpha_i \cdot \frac{b_{i}}{w_{i}}}$，即
 $$B_{n\times 1}= (\frac{softmax(A_{m\times n}, dim=1)}{ReLU(W_{m\times n})})^T \cdot A_{m\times 1}$$
+但是会有一个问题，即$W_{m\times n}$的元素可能小于等于0，所以应该引入一个掩码和epsilon，即
+$$M_{m\times n}=\mathbb{I}(W_{m\times n}>0) \in {0,1}^{m\times n}$$
+$$B_{n\times 1}= (\frac{softmax(A_{m\times n}, dim=1)}{min(W_{m\times n}, epsilon)}\odot M_{m\times n})^{T} \cdot A_{m\times 1}$$
+但是这里
