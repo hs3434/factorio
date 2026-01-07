@@ -8,6 +8,7 @@ import networkx as nx
 from pathlib import Path
 from collections import OrderedDict, defaultdict
 from typing import Any, Dict, List, Callable
+from numpy import 
 
 from .spider import formula_path
 
@@ -46,7 +47,101 @@ def identify_cyclic_items(G: nx.DiGraph, item_nodes: List[str]) -> Set[str]:
             continue
     return cyclic_items
 
+def read_formula(formula_path=formula_path) -> nx.DiGraph:
+    g = nx.DiGraph()
 
+    with open(formula_path, "r", encoding="utf-8") as f:
+        formula = json.load(f, cls=json.JSONDecoder)
+    for key in formula:
+        g.add_node(key, type="item", base_info=formula[key]["base_info"])
+    for key in formula:
+        formula_list = formula[key]["formula_list"]
+        for f in formula_list:
+            name = f["name"] + "-formula"
+            if name not in g and f["by"] not in {"转化站", "灌装站"}:
+                g.add_node(name, type="formula", sub_type=f["type"], by=f["by"])
+                for i in f["inputs"]:
+                    speed = f["inputs"][i]["speed"]
+                    if i in f["outputs"]:
+                        speed = speed - f["outputs"][i]["speed"]
+                    if speed > 0:
+                        g.add_edge(i, name, speed=speed, ratio=1/speed)
+                for i in f["outputs"]:
+                    speed = f["outputs"][i]["speed"]
+                    if i in f["inputs"]:
+                        speed = speed - f["inputs"][i]["speed"]
+                    if speed > 0:
+                        g.add_edge(name, i, speed=speed, ratio=speed)
+    return g
+    
+def parse_recipe_graph(
+        G: nx.DiGraph,
+        weight="speed"
+    ):
+    """
+    解析nx.DiGraph配方图，提取核心信息。
+        返回：
+            formula_weight_matrix, item_nodes, formula_nodes, item2idx, formula2idx, idx2item, idx2formula
+    """
+    item_nodes = [n for n in G.nodes if G.nodes[n].get('type', "item") == 'item']
+    formula_nodes = [n for n in G.nodes if G.nodes[n].get('type', "") == 'formula']
+
+    item2idx = {n: i for i, n in enumerate(item_nodes)}
+    formula2idx = {n: i for i, n in enumerate(formula_nodes)}
+    idx2item = {i: n for n, i in item2idx.items()}
+    idx2formula = {i: n for n, i in formula2idx.items()}
+
+    # m * n 的权重矩阵，m是物料数量，n是配方数量
+    formula_weight_matrix = np.zeros((len(item_nodes), len(formula_nodes)), dtype=np.float32)
+    
+    
+    for formula in formula_nodes:
+        rest = {}
+        idx = formula2idx[formula]
+        for node, _, data in G.in_edges(formula, data=True):
+            rest[node] = rest.get(node, 0) -  data.get(weight, 0)
+        for _, node, data in G.out_edges(formula, data=True):
+            rest[node] = rest.get(node, 0) +  data.get(weight, 0)
+        for node in rest:
+            if node in item2idx:
+                node_idx = item2idx[node]
+                formula_weight_matrix[node_idx, idx] = rest[node]
+
+    return formula_weight_matrix, item_nodes, formula_nodes, item2idx, formula2idx, idx2item, idx2formula
+        
+def parse_item(G, item_nodes, item2idx, target_dict: dict, is_source: Callable[[nx.DiGraph, str], bool] = is_base_type):
+    """
+    识别和区分不同资源节点
+        返回：
+            target_weights, base_items, base_idxs, target_items, target_idxs, other_items, other_items_idx
+    """
+    
+    base_items = [n for n in item_nodes if is_source(G, n)]
+    base_idxs = [item2idx[base] for base in base_items]
+    target_items = list(target_dict.keys())
+    
+    tmp = set(target_items).difference(item_nodes)
+    if tmp:
+        raise ValueError(f"目标节点{tmp}不是物料节点")
+    tmp = set(target_items).intersection(base_items)
+    if tmp:
+        raise ValueError(f"目标节点{tmp}是基础资源")
+    
+    target_idxs = [item2idx[target] for target in target_items]
+    
+    # m * 1 的权重矩阵，m是物料数量
+    target_weights = np.zeros([len(item_nodes)], dtype=np.float32)
+    for item, weight in target_dict.items():
+        idx = item2idx[item]
+        target_weights[idx] = weight
+        
+    other_items = [n for n in item_nodes if n not in base_items and n not in target_items]
+    other_items_idx = [item2idx[item] for item in other_items]
+    
+    return target_weights, base_items, base_idxs, target_items, target_idxs, other_items, other_items_idx
+
+        
+             
 class FormulaDiGraph:   
     g: nx.DiGraph
     
@@ -164,8 +259,6 @@ class FormulaDiGraph:
                     current_path.extend(tmp_path)
                     stack2.append((current_path, tmp_product))
         return stack2.pop()
-       
-formula = FormulaDiGraph()
 
 
 import networkx as nx
