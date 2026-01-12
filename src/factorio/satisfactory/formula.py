@@ -57,7 +57,7 @@ def read_formula(formula_path=formula_path) -> nx.DiGraph:
         formula_list = formula[key]["formula_list"]
         for f in formula_list:
             name = f["name"] + "-formula"
-            if name not in g and f["by"] not in {"转化站", "灌装站"}:
+            if name not in g: #and f["by"] not in {"转化站", "灌装站"}:
                 g.add_node(name, type="formula", sub_type=f["type"], by=f["by"])
                 for i in f["inputs"]:
                     speed = f["inputs"][i]["speed"]
